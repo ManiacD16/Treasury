@@ -12,15 +12,19 @@ import {
 import { getErrorMessage } from '@/lib/format';
 
 const OP_BNB_SMART_CHAIN = {
-  chainId: '0xCC', // 204
-  chainName: 'opBNB',
+  chainId: '0xcc', // 204
+  chainName: 'opBNB Mainnet',
   nativeCurrency: {
     name: 'BNB',
     symbol: 'BNB',
     decimals: 18
   },
-  rpcUrls: ['https://opbnb-mainnet-rpc.bnbchain.org'],
-  blockExplorerUrls: ['https://opbnb.bscscan.com']
+  rpcUrls: [
+    'https://opbnb-mainnet-rpc.bnbchain.org',
+    'https://opbnb-rpc.publicnode.com',
+    'https://opbnb.api.pocket.network'
+  ],
+  blockExplorerUrls: ['https://opbnbscan.com']
 };
 
 type TreasuryStats = {
@@ -176,7 +180,7 @@ const refreshStats = useCallback(
   [account, getProvider, hasContractAddress, provider]
 );
 
-const switchToBnbSmartChainTestnet = useCallback(async () => {
+const switchToOpBnbSmartChain = useCallback(async () => {
   if (!window.ethereum) {
     throw new Error('MetaMask or another EIP-1193 wallet is required.');
   }
@@ -192,7 +196,7 @@ const switchToBnbSmartChainTestnet = useCallback(async () => {
       switchError?.data?.originalError?.code ||
       switchError?.data?.code;
 
-    if (errorCode === 4902) {
+    if (errorCode === 4902 || errorCode === -32603) {
       await window.ethereum.request({
         method: 'wallet_addEthereumChain',
         params: [OP_BNB_SMART_CHAIN]
@@ -215,17 +219,18 @@ const connectWallet = useCallback(async () => {
   setError('');
 
   try {
-    await switchToBnbSmartChainTestnet();
-
     const activeProvider = getProvider();
 
     await activeProvider.send('eth_requestAccounts', []);
 
-    const signer = await activeProvider.getSigner();
-    const walletAddress = await signer.getAddress();
-    const network = await activeProvider.getNetwork();
+    await switchToOpBnbSmartChain();
 
-    setProvider(activeProvider);
+    const refreshedProvider = getProvider();
+    const signer = await refreshedProvider.getSigner();
+    const walletAddress = await signer.getAddress();
+    const network = await refreshedProvider.getNetwork();
+
+    setProvider(refreshedProvider);
     setAccount(walletAddress);
     setChainId(network.chainId);
 
@@ -235,7 +240,7 @@ const connectWallet = useCallback(async () => {
   } finally {
     setIsConnecting(false);
   }
-}, [getProvider, refreshStats, switchToBnbSmartChainTestnet]);
+}, [getProvider, refreshStats, switchToOpBnbSmartChain]);
 
   const readRequest = useCallback(async (txId: string | bigint): Promise<TreasuryRequest> => {
     const normalizedTxId = BigInt(txId);
@@ -339,7 +344,7 @@ const createWithdrawalRequest = useCallback(
 
 const handleChainChanged = async () => {
   try {
-    await switchToBnbSmartChainTestnet();
+    await switchToOpBnbSmartChain();
 
     const activeProvider = getProvider();
     const network = await activeProvider.getNetwork();
