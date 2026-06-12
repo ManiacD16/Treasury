@@ -13,13 +13,13 @@ import { getErrorMessage } from '@/lib/format';
 
 const OP_BNB_SMART_CHAIN = {
   chainId: '0xCC', // 204
-  chainName: 'BNB Smart Chain Testnet',
+  chainName: 'opBNB',
   nativeCurrency: {
     name: 'BNB',
-    symbol: 'tBNB',
+    symbol: 'BNB',
     decimals: 18
   },
-  rpcUrls: ['https://opbnb-mainnet-rpc.bnbchain.org/'],
+  rpcUrls: ['https://opbnb-mainnet-rpc.bnbchain.org'],
   blockExplorerUrls: ['https://opbnb.bscscan.com']
 };
 
