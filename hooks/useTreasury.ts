@@ -2,19 +2,25 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { BrowserProvider, Contract, ContractTransactionReceipt, ethers } from 'ethers';
-import { TREASURY_ABI, TREASURY_CONTRACT_ADDRESS, TreasuryRequest, ZERO_ADDRESS } from '@/lib/contract';
+import {
+  TREASURY_ABI,
+  TREASURY_CONTRACT_ADDRESS,
+  TREASURY_OWNER_ADDRESSES,
+  TreasuryRequest,
+  USDT_TOKEN_ADDRESS
+} from '@/lib/contract';
 import { getErrorMessage } from '@/lib/format';
 
-const BNB_SMART_CHAIN_TESTNET = {
-  chainId: '0x61', // 97
+const OP_BNB_SMART_CHAIN = {
+  chainId: '0xCC', // 204
   chainName: 'BNB Smart Chain Testnet',
   nativeCurrency: {
     name: 'BNB',
     symbol: 'tBNB',
     decimals: 18
   },
-  rpcUrls: ['https://data-seed-prebsc-1-s1.binance.org:8545/'],
-  blockExplorerUrls: ['https://testnet.bscscan.com']
+  rpcUrls: ['https://opbnb-mainnet-rpc.bnbchain.org/'],
+  blockExplorerUrls: ['https://opbnb.bscscan.com']
 };
 
 type TreasuryStats = {
@@ -23,10 +29,11 @@ type TreasuryStats = {
   isWithdrawalActive: boolean;
   isActionRequestActive: boolean;
   isCurrentWalletOwner: boolean;
+  contractOwners: string[];
+  usdtContractBalance: bigint;
 };
 
 type CreateWithdrawalInput = {
-  tokenAddress: string;
   toAddress: string;
   amount: string;
   decimals: number;
@@ -44,7 +51,9 @@ const [stats, setStats] = useState<TreasuryStats>({
   approveRequired: BigInt(0),
   isWithdrawalActive: false,
   isActionRequestActive: false,
-  isCurrentWalletOwner: false
+  isCurrentWalletOwner: false,
+  contractOwners: TREASURY_OWNER_ADDRESSES,
+  usdtContractBalance: BigInt(0)
 });
 
   const hasContractAddress = useMemo(() => ethers.isAddress(TREASURY_CONTRACT_ADDRESS), []);
@@ -86,7 +95,9 @@ const refreshStats = useCallback(
       const contractCode = await activeProvider.getCode(TREASURY_CONTRACT_ADDRESS);
 
       if (contractCode === '0x') {
-        setError('No contract found on this address for the connected network. Please check contract address or switch network.');
+        setError(
+          'No contract found on this address for the connected network. Please check contract address or switch network.'
+        );
         return;
       }
 
@@ -103,9 +114,12 @@ const refreshStats = useCallback(
       const isWithdrawalActive = await contract.isWithdrawlActive();
       const isActionRequestActive = await contract.isActionRequestActive();
 
+      const usdtContractBalance = await contract.getContractBalance(
+        USDT_TOKEN_ADDRESS
+      );
+
       let isMultiSigOwner = false;
       let isOwnableOwner = false;
-      let isOwnersArrayOwner = false;
 
       try {
         isMultiSigOwner = await contract.isOwner(connectedAddress);
@@ -122,21 +136,28 @@ const refreshStats = useCallback(
         isOwnableOwner = false;
       }
 
-      const ownersArray: string[] = [];
+      const contractOwners: string[] = [];
 
-      for (let index = 0; index < 3; index++) {
+      for (let index = 0; index < 5; index++) {
         try {
           const ownerAddress = await contract.owners(index);
 
           if (ethers.isAddress(ownerAddress)) {
-            ownersArray.push(ethers.getAddress(ownerAddress));
+            contractOwners.push(ethers.getAddress(ownerAddress));
           }
         } catch {
-          // Ignore if owners(index) does not exist or index is invalid
+          // Ignore invalid index.
         }
       }
 
-      isOwnersArrayOwner = ownersArray.includes(connectedAddress);
+      const normalizedOwners =
+        contractOwners.length > 0
+          ? contractOwners
+          : TREASURY_OWNER_ADDRESSES.map((ownerAddress) =>
+              ethers.getAddress(ownerAddress)
+            );
+
+      const isOwnersArrayOwner = normalizedOwners.includes(connectedAddress);
 
       setStats({
         requestCount,
@@ -144,7 +165,9 @@ const refreshStats = useCallback(
         isWithdrawalActive,
         isActionRequestActive,
         isCurrentWalletOwner:
-          isMultiSigOwner || isOwnableOwner || isOwnersArrayOwner
+          isMultiSigOwner || isOwnableOwner || isOwnersArrayOwner,
+        contractOwners: normalizedOwners,
+        usdtContractBalance
       });
     } catch (refreshError) {
       setError(getErrorMessage(refreshError));
@@ -161,7 +184,7 @@ const switchToBnbSmartChainTestnet = useCallback(async () => {
   try {
     await window.ethereum.request({
       method: 'wallet_switchEthereumChain',
-      params: [{ chainId: BNB_SMART_CHAIN_TESTNET.chainId }]
+      params: [{ chainId: OP_BNB_SMART_CHAIN.chainId }]
     });
   } catch (switchError: any) {
     const errorCode =
@@ -172,12 +195,12 @@ const switchToBnbSmartChainTestnet = useCallback(async () => {
     if (errorCode === 4902) {
       await window.ethereum.request({
         method: 'wallet_addEthereumChain',
-        params: [BNB_SMART_CHAIN_TESTNET]
+        params: [OP_BNB_SMART_CHAIN]
       });
 
       await window.ethereum.request({
         method: 'wallet_switchEthereumChain',
-        params: [{ chainId: BNB_SMART_CHAIN_TESTNET.chainId }]
+        params: [{ chainId: OP_BNB_SMART_CHAIN.chainId }]
       });
 
       return;
@@ -242,12 +265,15 @@ const connectWallet = useCallback(async () => {
     return readRequest(count);
   }, [getReadContract, readRequest]);
 
-  const createWithdrawalRequest = useCallback(async ({ tokenAddress, toAddress, amount, decimals }: CreateWithdrawalInput) => {
-    if (!ethers.isAddress(toAddress)) throw new Error('Receiver address is invalid.');
-    if (!amount || Number(amount) <= 0) throw new Error('Amount must be greater than 0.');
+const createWithdrawalRequest = useCallback(
+  async ({ toAddress, amount, decimals }: CreateWithdrawalInput) => {
+    if (!ethers.isAddress(toAddress)) {
+      throw new Error('Receiver address is invalid.');
+    }
 
-    const normalizedTokenAddress = tokenAddress.trim() || ZERO_ADDRESS;
-    if (!ethers.isAddress(normalizedTokenAddress)) throw new Error('Token address is invalid.');
+    if (!amount || Number(amount) <= 0) {
+      throw new Error('Amount must be greater than 0.');
+    }
 
     setIsLoading(true);
     setError('');
@@ -256,19 +282,30 @@ const connectWallet = useCallback(async () => {
       const contract = await getSignerContract();
       const parsedAmount = ethers.parseUnits(amount, decimals);
 
-      const tx = await contract.createWithdrawalRequest(normalizedTokenAddress, toAddress, parsedAmount);
+      const tx = await contract.createWithdrawalRequest(
+        USDT_TOKEN_ADDRESS,
+        toAddress,
+        parsedAmount
+      );
+
       const receipt = await tx.wait();
       const txId = getCreatedWithdrawalTxId(contract, receipt);
 
       await refreshStats();
-      return { hash: tx.hash as string, txId };
+
+      return {
+        hash: tx.hash as string,
+        txId
+      };
     } catch (createError) {
       setError(getErrorMessage(createError));
       throw createError;
     } finally {
       setIsLoading(false);
     }
-  }, [getSignerContract, refreshStats]);
+  },
+  [getSignerContract, refreshStats]
+);
 
   const approveWithdrawal = useCallback(async (txId: string | bigint) => {
     const normalizedTxId = BigInt(txId);
