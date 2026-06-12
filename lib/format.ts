@@ -23,7 +23,7 @@ export function formatUnixTime(seconds: bigint) {
 }
 
 export function isExpired(expiryTime: bigint) {
-  if (expiryTime <= 0n) return false;
+  if (expiryTime <= BigInt(0)) return false;
   return Date.now() > Number(expiryTime) * 1000;
 }
 
